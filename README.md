@@ -5,3 +5,5 @@ mDNS service discovery in pure TypeScript
 
 [![Build Status](https://img.shields.io/circleci/project/github/AlCalzone/node-mdns-sd.svg)](https://circleci.com/gh/AlCalzone/node-mdns-sd)
 [![Coverage Status](https://img.shields.io/coveralls/github/AlCalzone/node-mdns-sd.svg)](https://coveralls.io/github/AlCalzone/node-mdns-sd)
+
+# this is not ready yet, just reserving my spot here ;)

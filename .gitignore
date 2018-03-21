@@ -269,4 +269,4 @@ rfc/
 coverage/
 
 # npm packet files
-node-tradfri-client-*.tgz
+mdns-sd-*.tgz
