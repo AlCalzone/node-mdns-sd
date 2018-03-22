@@ -1,5 +1,20 @@
 // https://tools.ietf.org/html/rfc1035
 
+// TODO: check limits:
+// 2.3.4. Size limits
+
+// Various objects and parameters in the DNS have size limits.  They are
+// listed below.  Some could be easily changed, others are more
+// fundamental.
+
+// labels          63 octets or less
+
+// names           255 octets or less
+
+// TTL             positive values of a signed 32 bit number.
+
+// UDP messages    512 octets or less
+
 export class DNSMessage {
 
 	public constructor(
@@ -42,10 +57,6 @@ export class MessageHeader {
 		public recursionDesired: boolean,
 		public recursionAvailable: boolean,
 		public responseCode: number,
-		// public questionCount: number,
-		// public answerCount: number,
-		// public nameServerCount: number,
-		// public additionalRecordCount: number,
 	) {
 		// nada
 	}
@@ -73,7 +84,7 @@ export class MessageHeader {
 export class Question {
 
 	public constructor(
-		public labels: string[],
+		public name: DNSName,
 		public type: QuestionType,
 		public qclass: QuestionClass,
 	) {
@@ -82,7 +93,7 @@ export class Question {
 
 	public serialize(): Buffer {
 		return Buffer.concat([
-			...this.labels.map(l => serializeLabel(l)),
+			this.name.serialize(),
 			number2Buffer16(this.type),
 			number2Buffer16(this.qclass),
 		]);
@@ -93,7 +104,7 @@ export class Question {
 export class ResourceRecord {
 
 	public constructor(
-		public name: string,
+		public name: DNSName,
 		public type: RecordType,
 		public rclass: RecordClass,
 		public ttl: number,
@@ -104,13 +115,51 @@ export class ResourceRecord {
 
 	public serialize(): Buffer {
 		return Buffer.concat([
-			// TODO: how is the name serialized?!
+			this.name.serialize(),
 			number2Buffer16(this.type),
 			number2Buffer16(this.rclass),
 			number2Buffer16(this.ttl),
 			number2Buffer16(this.data.length),
 			this.data,
 		]);
+	}
+}
+
+export class DNSName {
+
+	public constructor(
+		public labels: string[]
+	) {
+		// nada
+	}
+
+	public serialize(): Buffer {
+		return Buffer.concat([
+			...this.labels.map(l => serializeLabel(l))
+		]);
+	}
+
+	public static deserialize(data: Buffer, offset: number): {bytesRead: number, result: DNSName} {
+		const {bytesRead, labels} = parseLabels(data, offset);
+		return {
+			bytesRead,
+			result: new DNSName(labels),
+		}
+	}
+
+	public static fromString(str: string): DNSName {
+		const labels = str.split(".");
+		// the last (root) label is always empty
+		if (labels[labels.length-1] != "") labels.push("");
+		return new DNSName(labels);
+	}
+
+	public toString(): string {
+		return this.labels
+			// the last (root) label is always empty
+			.filter((l, index) => index < this.labels.length-1 || l != "")
+			.join(".")
+		;
 	}
 }
 
@@ -195,11 +244,71 @@ export const enum RecordClass {
 
 function number2Buffer16(num: number): Buffer {
 	const ret = new Buffer(2);
-	ret.writeUInt16LE(num, 0);
+	ret.writeUInt16BE(num, 0);
 	return ret;
 }
 
+function getLabelType(data: Buffer, offset: number) {
+	switch (data[offset] >>> 6) {
+		case 0: return "label";
+		case 3: return "pointer";
+		default: throw new Error("Unexpected data in entry label")
+	}
+}
+
+/** 
+ * Parses labels until reaching a root (=empty) label 
+ */
+function parseLabels(data: Buffer, offset: number): {bytesRead: number, labels: string[]} {
+	let bytesRead: number;
+	const labelType = getLabelType(data, offset);
+	if (labelType === "label") {
+		let label: string;
+		({bytesRead, label} = parseLabel(data, offset));
+		if (label === "") {
+			// we reached the root label, we're done
+			return {
+				bytesRead,
+				labels: [label],
+			};
+		} else {
+			// continue parsing recursively
+			let labels: string[]
+			let additionalBytesRead: number;
+			({bytesRead: additionalBytesRead, labels} = parseLabels(data, offset + bytesRead));
+			return {
+				bytesRead: bytesRead + additionalBytesRead,
+				labels: [label, ...labels],
+			};
+		}
+	} else if (labelType === "pointer") {
+		const pointerTarget = getPointerTarget(data, offset);
+		// we don't care about the #bytes at the pointer location,
+		// the next entry is in 2 bytes
+		let {labels} = parseLabels(data, pointerTarget);
+		return {
+			bytesRead: 2,
+			labels,
+		};
+	}
+}
+
+/** parses a single label */
+function parseLabel(data: Buffer, offset: number): {bytesRead: number, label: string} {
+	const length = data[offset];
+	const label = data.toString("utf8", offset + 1, offset + 1 + length);
+	return {
+		bytesRead: length + 1,
+		label,
+	};
+}
+
+function getPointerTarget(data: Buffer, offset: number): number {
+	return data.readUInt16BE(offset) & 0b0011_1111_1111_1111;
+}
+
 function serializeLabel(label: string): Buffer {
+	if (label.length > 63) throw new Error("Labels must be 63 bytes or less")
 	return Buffer.concat([
 		Buffer.from([label.length]),
 		Buffer.from(label, "utf8"),
